@@ -1,4 +1,4 @@
-
+import torch
 
 class FirstOrderSensitivitySolver():
 
@@ -29,8 +29,6 @@ class FirstOrderSensitivitySolver():
         return avg_loss
 
 
-        
-        
 
     def path_gradients(self, x, H):
         pass

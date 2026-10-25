@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 class SuperhedgingProblem():
     def __init__(
@@ -12,27 +13,42 @@ class SuperhedgingProblem():
 
     def payoffs(self, paths):
         """ Return one payoff per simulated path"""
-        return self.payoff(paths)
+        values =  self.payoff(paths)
+        if not isinstance(values, torch.Tensor):
+            raise TypeError("payoff must return a PyTorch tensor.")
+        if values.shape != (paths.shape[0],):
+            raise ValueError("payoff must return shape (n_paths,).")
+
+        return values
 
     def trading_gains(self, paths, H):
+        if paths.ndim != 3 or paths.shape[2] != 2:
+            raise ValueError(
+                "paths must have shape (n_paths, n_steps + 1, 2)."
+            )
         if paths.shape[1] != len(self.trading_times):
             raise ValueError(
-            "trading_times must match the number of path observations."
+                "trading_times must match the number of path observations."
             )
+
         n_paths = paths.shape[0]
-        n_steps = paths.shape[1]-1
-        gains = np.zeros(n_paths)
+        n_steps = paths.shape[1] - 1
+        gains = paths.new_zeros(n_paths)
+
         for t in range(n_steps):
-            # Only information available until the current time
-            history = paths[:, :t+1, :]
-            holdings = np.asarray(H(t,history), dtype = float)
+            history = paths[:, :t + 1, :]
+            holdings = H(t, history)
+
+            if not isinstance(holdings, torch.Tensor):
+                raise TypeError("H must return a PyTorch tensor.")
             if holdings.shape != (n_paths,):
                 raise ValueError("H must return shape (n_paths,).")
-            if not np.all(np.isfinite(holdings)):
+            if not torch.isfinite(holdings).all():
                 raise ValueError("Holdings must be finite.")
 
             price_change = paths[:, t + 1, 0] - paths[:, t, 0]
-            gains += holdings * price_change
+            gains = gains + holdings * price_change
+
         return gains
         
 
@@ -41,4 +57,6 @@ class SuperhedgingProblem():
     
 
     def shortfall(self, paths,x ,H):
-        return np.maximum(self.payoffs(paths) - self.terminal_wealth(paths,x,H),0.0)
+        """Return the nonnegative terminal shortfall for each path."""
+        error = self.payoffs(paths) - self.terminal_wealth(paths, x, H)
+        return torch.clamp(error, min=0.0)
