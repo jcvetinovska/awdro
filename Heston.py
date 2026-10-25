@@ -143,33 +143,64 @@ class Heston:
 
         s = state[:, 0]
         v = state[:, 1]
-        n_paths = state.shape[0]
+        xi = self.vol_of_vol
 
-        # Draw independent shocks, then introduce correlation.
-        z_s = rng.standard_normal(n_paths)
-        z_independent = rng.standard_normal(n_paths)
-        z_v = (
-            self.rho * z_s
-            + np.sqrt(1.0 - self.rho**2) * z_independent
-        )
+        decay = np.exp(-self.kappa * dt)
+        one_minus_decay = -np.expm1(-self.kappa * dt)
 
-        sqrt_v_dt = np.sqrt(v * dt)
+        if xi == 0.0:
+            # Deterministic variance: endpoint and integral are exact.
+            v_next = self.theta + (v - self.theta) * decay
+            integrated_variance = (
+                self.theta * dt
+                + (v - self.theta) * one_minus_decay / self.kappa
+            )
+            integrated_variance = np.maximum(integrated_variance, 0.0)
+
+            z = rng.standard_normal(v.shape)
+            log_return = (
+                self.mu * dt
+                - 0.5 * integrated_variance
+                + np.sqrt(integrated_variance) * z
+            )
+
+        else:
+            # Exact CIR variance transition.
+            c = xi**2 * one_minus_decay / (4.0 * self.kappa)
+            degrees = 4.0 * self.kappa * self.theta / xi**2
+            noncentrality = v * decay / c
+
+            poisson_draws = rng.poisson(noncentrality / 2.0)
+            gamma_shape = degrees / 2.0 + poisson_draws
+
+            # A zero shape corresponds to a point mass at zero.
+            v_next = np.zeros_like(v)
+            positive = gamma_shape > 0.0
+            v_next[positive] = c * rng.gamma(
+                shape=gamma_shape[positive],
+                scale=2.0,
+            )
+
+            # Trapezoidal approximation of integrated variance.
+            integrated_variance = 0.5 * (v + v_next) * dt
+
+            z = rng.standard_normal(v.shape)
+            log_return = (
+                self.mu * dt
+                + (self.rho * self.kappa / xi - 0.5)
+                * integrated_variance
+                + (self.rho / xi)
+                * (v_next - v - self.kappa * self.theta * dt)
+                + np.sqrt((1.0 - self.rho**2) * integrated_variance) * z
+            )
+
         next_state = np.empty_like(state)
-
-        # Log-Euler stock-price update.
-        next_state[:, 0] = s * np.exp(
-            (self.mu - 0.5 * v) * dt + sqrt_v_dt * z_s
-        )
-
-        # Projected Euler variance update.
-        v_next = (
-            v
-            + self.kappa * (self.theta - v) * dt
-            + self.vol_of_vol * sqrt_v_dt * z_v
-        )
-        next_state[:, 1] = np.maximum(v_next, 0.0)
+        next_state[:, 0] = s * np.exp(log_return)
+        next_state[:, 1] = v_next
 
         return next_state
+
+       
 
 
     
