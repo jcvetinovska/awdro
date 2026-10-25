@@ -200,6 +200,15 @@ class Heston:
 
         return next_state
 
+    def is_valid_state(self, state):
+        state = np.asarray(state, dtype=float)
+        return (
+            state.shape == (2,)
+            and np.isfinite(state).all()
+            and state[0] > 0
+            and state[1] >= 0
+    )
+
        
 
 
