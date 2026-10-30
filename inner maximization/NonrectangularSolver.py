@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import torch
-import random
+from scipy.optimize import minimize_scalar
 
 class NonrectangularSolver():
 
@@ -18,11 +18,11 @@ class NonrectangularSolver():
         self.budget = budget
         self.discretization = discretization
 
+        self.state_space = reference_model.is_valid_state
         self._validate_inputs()
 
-        self.state_space = reference_model.is_valid_state
         self.reference_nodes = self._build_reference_model()
-
+        self.adversarial_candidates = self._build_adversarial_candidates()
 
         
 
@@ -328,7 +328,23 @@ class NonrectangularSolver():
             return self.conditional_expectation(integrand, next_states, node["probabilities"],child_ids)
 
 
+     # candidate generation per trading date
+    
+    def _build_adversarial_candidates(self):
+        candidates = {}
+        for t in range(len(self.trading_times)):
+            states = [
+                node["state"]
+                for node in self.reference_nodes
+                if node["time_index"] == t
+            ]
+            candidates[t] = np.unique(
+                np.asarray(states, dtype=float),
+                axis=0,
+            )
+        return candidates
 
+    
     def maximize_next_state(    
         self,
         t,
@@ -341,28 +357,140 @@ class NonrectangularSolver():
     ):
 
         extended_reference = np.vstack([reference_history, reference_next])
-        def objective(adversarial_next):
-            extended_adversarial = np.vstack([adversarial_history, adversarial_next])
+        best_value = -np.inf
+
+        for adversarial_next in self.adversarial_candidates[t + 1]:
+            extended_adversarial = np.vstack([
+                adversarial_history,
+                adversarial_next,
+            ])
+
             continuation = self.backward_value(
-                t+1,
+                t + 1,
                 reference_next_node_id,
                 extended_reference,
                 extended_adversarial,
                 multiplier,
-                loss_fn
+                loss_fn,
             )
-            return continuation - multiplier*stage_cost(reference_next, adversarial_next)
 
-        
+            value = continuation - multiplier * self.stage_cost(
+                reference_next,
+                adversarial_next,
+            )
 
-        pass
+            best_value = max(best_value, value)
+
+        return best_value
+       
+
 
 
     def dual_objective(self, multiplier, loss_fn):
+        if (
+            not np.isfinite(multiplier)
+            or multiplier < 0
+        ):
+            raise ValueError("Lagrange multiplier must be finite and nonnegative.")
 
-        pass
+        initial_state = self.reference_nodes[0]["state"]
+        initial_history = initial_state.reshape(1,2)
+        continuation_value = self.backward_value(0, 0, initial_history, initial_history.copy(), multiplier, loss_fn)
+        return continuation_value + multiplier * self.budget**2
+
+
+    def nominal_value(self, reference_node_id, reference_history, loss_fn):
+        node = self.reference_nodes[reference_node_id]
+
+        if not node["children"]:
+            return self.terminal_value(reference_history, loss_fn)
+
+        total = 0.0
+
+        for child_id, probability in zip(
+            node["children"], node["probabilities"]
+        ):
+            child_state = self.reference_nodes[child_id]["state"]
+            reference_continue = np.vstack([
+                reference_history,
+                child_state,
+            ])
+
+            continuation = self.nominal_value(
+                child_id,
+                reference_continue,
+                loss_fn,
+            )
+
+            total += probability * continuation
+
+        return total
 
     def solve(self, loss_fn):
-        
-        pass
+
+        if self.budget == 0:
+            initial_state = self.reference_nodes[0]["state"]
+            initial_history = initial_state.reshape(1, 2)
+
+            value = self.nominal_value(
+                0,
+                initial_history,
+                loss_fn,
+            )
+
+            return {
+                "value": value,
+                "multiplier": None,
+            }
+            
+        previous_value = self.dual_objective(0.0, loss_fn)
+        upper = 1.0
+
+        for _ in range(50):
+            current_value = self.dual_objective(upper, loss_fn)
+
+            if not np.isfinite(current_value):
+                raise ValueError("Dual objective must be finite.")
+
+            if current_value >= previous_value:
+                break
+
+            previous_value = current_value
+            upper *= 2.0
+        else:
+            raise RuntimeError(
+                "Could not bracket a dual minimizer within 50 expansions."
+            )
+
+        result = minimize_scalar(
+            self.dual_objective,
+            args=(loss_fn,),
+            bounds=(0.0, upper),
+            method="bounded",
+            options={"xatol": 1e-6},
+        )
+
+        if not result.success or not np.isfinite(result.fun):
+            raise RuntimeError(
+                f"Dual minimization failed: {result.message}"
+            )
+
+        # The bounded optimizer may not evaluate the endpoints.
+        multipliers = [0.0, float(result.x), upper]
+        values = [
+            self.dual_objective(0.0, loss_fn),
+            float(result.fun),
+            current_value,
+        ]
+
+        best_index = int(np.argmin(values))
+
+        return {
+            "value": values[best_index],
+            "multiplier": multipliers[best_index],
+        }
+
+    
+            
+   
 
