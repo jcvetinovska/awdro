@@ -1,9 +1,10 @@
 import math
 import numpy as np
 import torch
-from scipy.optimize import minimize_scalar
+from scipy.optimize import linprog
+from scipy.sparse import coo_matrix, csr_matrix, eye, kron, vstack, hstack
 from itertools import product
-from scipy.sparse import coo_matrix, csr_matrix, eye, kron, vstack
+
 
 class RectangularSolver():
 
@@ -483,3 +484,188 @@ class RectangularSolver():
         b_ub = np.array([self.budget**2], dtype=float)
 
         return A_ub, b_ub
+
+
+    def conditional_worst_case(self, adversarial_history, continuation_values):
+        """Compute the worst attainable conditional continuation value.
+
+        Parameters
+        ----------
+        adversarial_history : array-like
+            Shape (t + 1, 2), containing the observed adversarial history.
+            The history must be nonterminal.
+        continuation_values : array-like
+            One finite value per candidate state at time t + 1, ordered
+            as self.adversarial_candidates[t + 1].
+
+        Returns
+        -------
+        float or None
+            Worst conditional continuation value. Returns None if the LP
+            reports that the history cannot have positive probability
+            under any model in the original ambiguity set.
+
+        Notes
+        -----
+        Uses the Charnes–Cooper transformation of a linear-fractional
+        problem into an LP. This transformation introduces no additional
+        approximation; the numerical solver still uses tolerances.
+        """
+        history = np.asarray(adversarial_history, dtype=float)
+        values = np.asarray(continuation_values, dtype=float)
+
+        if (
+            history.ndim != 2
+            or history.shape[1] != 2
+            or not 1 <= history.shape[0] < len(self.trading_times)
+        ):
+            raise ValueError(
+                "Provide a nonterminal history with shape (n_observations, 2)."
+            )
+
+        if not np.isfinite(history).all():
+            raise ValueError("History must contain finite values.")
+
+        t = history.shape[0] - 1
+        next_states = self.adversarial_candidates[t + 1]
+
+        if values.shape != (len(next_states),):
+            raise ValueError(
+                "Provide one continuation value per next-state candidate."
+            )
+
+        if not np.isfinite(values).all():
+            raise ValueError("Continuation values must be finite.")
+
+        # Identify complete adversarial paths passing through this history.
+        history_mask = np.all(
+            self.adversarial_paths[:, :t + 1, :] == history,
+            axis=(1, 2),
+        )
+
+        if not history_mask.any():
+            raise ValueError("History is absent from the candidate path space.")
+
+        n = self.reference_paths.shape[0]
+        m = self.adversarial_paths.shape[0]
+
+        # Each matching path receives the continuation value associated
+        # with its next state. Paths outside the history contribute zero.
+        path_values = np.zeros(m)
+
+        for k, state in enumerate(next_states):
+            next_state_mask = np.all(
+                self.adversarial_paths[:, t + 1, :] == state,
+                axis=1,
+            )
+            path_values[history_mask & next_state_mask] = values[k]
+
+        # Repeat the target-path coefficients for every reference path.
+        # These use the same flattened ordering as the coupling variables.
+        history_coefficients = np.tile(history_mask.astype(float), n)
+        value_coefficients = np.tile(path_values, n)
+
+        # Original objective:
+        #     (value_coefficients @ pi) / (history_coefficients @ pi)
+        #
+        # Let tau = 1 / P(history) and z = tau * pi.
+        # The new LP variables are [z, tau].
+
+        # Original equality constraints become A_eq @ z - b_eq * tau = 0.
+        transformed_A_eq = hstack(
+            [
+                self.A_eq,
+                csr_matrix(-self.b_eq.reshape(-1, 1)),
+            ],
+            format="csr",
+        )
+
+        # Normalize the scaled probability of the history to one.
+        normalization_row = csr_matrix(
+            np.concatenate([history_coefficients, [0.0]]).reshape(1, -1)
+        )
+
+        transformed_A_eq = vstack(
+            [transformed_A_eq, normalization_row],
+            format="csr",
+        )
+
+        transformed_b_eq = np.concatenate([
+            np.zeros(self.b_eq.size),
+            [1.0],
+        ])
+
+        # The global budget becomes A_ub @ z - b_ub * tau <= 0.
+        transformed_A_ub = hstack(
+            [
+                self.A_ub,
+                csr_matrix(-self.b_ub.reshape(-1, 1)),
+            ],
+            format="csr",
+        )
+        transformed_b_ub = np.zeros(self.b_ub.size)
+
+        # Negate the objective because linprog minimizes.
+        objective = np.concatenate([-value_coefficients, [0.0]])
+
+        result = linprog(
+            c=objective,
+            A_ub=transformed_A_ub,
+            b_ub=transformed_b_ub,
+            A_eq=transformed_A_eq,
+            b_eq=transformed_b_eq,
+            bounds=(0.0, None),
+            method="highs",
+        )
+
+        if result.status == 2:
+            # No feasible coupling gives this history positive probability.
+            return None
+
+        if not result.success:
+            raise RuntimeError(
+                f"Conditional optimization failed: {result.message}"
+            )
+
+        value = -float(result.fun)
+
+        if not np.isfinite(value):
+            raise RuntimeError("Conditional optimization returned a nonfinite value.")
+
+        return value
+
+    def backward_value(self, adversarial_history, loss_fn):
+        history = np.asarray(adversarial_history)
+        t = history.shape[0] - 1
+        if t == len(self.trading_times) - 1:
+            return self.terminal_value(history, loss_fn)
+        else:
+            next_states = self.adversarial_candidates[t+1]
+            continuation_values = np.zeros(next_states.shape[0])
+
+            for k, next_state in enumerate(next_states):
+                extended_history = np.vstack([history, next_state])
+                value = self.backward_value(extended_history, loss_fn)
+
+                if value is not None:
+                    continuation_values[k] = value
+
+            return self.conditional_worst_case(history, continuation_values)
+
+    def solve(self, loss_fn):
+        initial_state = self.reference_nodes[0]["state"]
+        initial_history = initial_state.reshape((1,2))
+
+        if self.budget == 0:
+            value = self.nominal_value(0, initial_history, loss_fn)
+
+        else:
+            value = self.backward_value(initial_history, loss_fn)
+
+        if value is None:
+            raise RuntimeError ("Initial history should be reachable")
+        if not np.isfinite(value):
+            raise RuntimeError ("Value function infinite")
+
+        return {"value": float(value)}
+
