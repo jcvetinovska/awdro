@@ -1,0 +1,2 @@
+attempted_seeds,successful_seeds,failed_seeds,mean_gap,mean_standard_error,bootstrap_CI95_lower,bootstrap_CI95_upper,median_gap,gap_p10,gap_p90,minimum_gap,maximum_gap,fraction_positive_above_tolerance,mean_nonrectangular_value,mean_rectangular_value
+100,100,0,0.16467212822584607,0.03680189280245226,0.09774078295351066,0.23835058125422426,0.0,-0.0,0.543611338532802,-3.3306690738754696e-16,1.7534568620002893,0.39,2.0342718615076136,2.1989439897334595

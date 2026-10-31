@@ -1,0 +1,13 @@
+,0
+payoff,european_call
+strike,100.0
+digital_payout,10.0
+maturity,1.0
+n_steps,2
+branches,2
+budget,1.0
+penalty,10.0
+capital_bounds,"(0.0, 50.0)"
+holding_bounds,"(-2.0, 2.0)"
+n_seeds,100
+first_seed,1000
