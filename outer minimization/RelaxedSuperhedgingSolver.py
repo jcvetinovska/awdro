@@ -153,7 +153,7 @@ class RelaxedSuperhedgingSolver():
             constraints,
         )
 
-        optimization_problem.solve(solver=cp.CLARABEL)
+        optimization_problem.solve(solver=cp.HIGHS)
 
         if optimization_problem.status != cp.OPTIMAL:
             raise RuntimeError(
@@ -362,7 +362,7 @@ class RelaxedSuperhedgingSolver():
             constraints,
         )
 
-        optimization.solve(solver=cp.CLARABEL)
+        optimization.solve(solver=cp.HIGHS)
 
         if optimization.status != cp.OPTIMAL:
             raise RuntimeError(
@@ -448,6 +448,77 @@ class RelaxedSuperhedgingSolver():
             "approximate_worst_case_shortfall": approximate_shortfall,
         }
 
+    def _build_history_groups(self, paths):
+        paths = np.asarray(paths, dtype=float)
+
+        n_paths, n_times, n_features = paths.shape
+        n_steps = n_times - 1
+
+        histories_by_time = []
+        groups_by_time = []
+
+        for t in range(n_steps):
+            # Exclude future observations.
+            histories = paths[:, :t + 1, :].reshape(n_paths, -1)
+
+            unique_histories, groups = np.unique(
+                histories,
+                axis=0,
+                return_inverse=True,
+            )
+
+            histories_by_time.append(
+                unique_histories.reshape(-1, t + 1, n_features)
+            )
+            groups_by_time.append(groups)
+
+        return histories_by_time, groups_by_time
 
 
+    def _build_adaptive_gains_matrix(self, paths):
+        """Build a sparse map from history-dependent holdings to path gains."""
+        paths = np.asarray(paths, dtype=float)
 
+        histories_by_time, groups_by_time = self._build_history_groups(paths)
+
+        n_paths = paths.shape[0]
+        price_changes = np.diff(paths[:, :, 0], axis=1)
+
+        row_indices = []
+        column_indices = []
+        coefficients = []
+
+        offsets = []
+        offset = 0
+
+        for t, groups in enumerate(groups_by_time):
+            offsets.append(offset)
+
+            # One coefficient per path at this trading date.
+            row_indices.append(np.arange(n_paths))
+            column_indices.append(offset + groups)
+            coefficients.append(price_changes[:, t])
+
+            offset += len(histories_by_time[t])
+
+        G = coo_matrix(
+            (
+                np.concatenate(coefficients),
+                (
+                    np.concatenate(row_indices),
+                    np.concatenate(column_indices),
+                ),
+            ),
+            shape=(n_paths, offset),
+        ).tocsr()
+
+        G.eliminate_zeros()
+
+        return G, histories_by_time, np.asarray(offsets, dtype=int)
+
+    def solve_adaptive_hedge_nonrectangular(
+        self,
+        transport_model,
+        capital_bounds,
+        holding_bounds,
+    ):
