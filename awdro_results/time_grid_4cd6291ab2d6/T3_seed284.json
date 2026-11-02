@@ -1,0 +1,23 @@
+{
+  "seed": 284,
+  "n_steps": 3,
+  "status": "ok",
+  "stage": "complete",
+  "error": "",
+  "nonrectangular_seconds": 0.004902540997136384,
+  "nonrectangular_value": 1.338938213891059,
+  "nonrectangular_capital": -0.0,
+  "nonrectangular_shortfall": 0.1338938213891059,
+  "nonrectangular_capital_at_bound": true,
+  "nonrectangular_holding_bound_fraction": 0.18181818181818182,
+  "rectangular_seconds": 0.19757083297008649,
+  "rectangular_value": 2.1201822393880922,
+  "rectangular_capital": -0.0,
+  "rectangular_shortfall": 0.2120182239388092,
+  "rectangular_capital_at_bound": true,
+  "rectangular_holding_bound_fraction": 0.18181818181818182,
+  "gap": 0.7812440254970332,
+  "gap_tolerance": 3.120182239388092e-05,
+  "positive_above_tolerance": true,
+  "total_seconds": 0.20729200000641868
+}
