@@ -1,3 +1,0 @@
-payoff,horizon,budget,seed,n_steps,reference_branches,penalty,nonrectangular_value,rectangular_value,gap,nonrectangular_capital,rectangular_capital,nonrectangular_holding,rectangular_holding,nonrectangular_shortfall,rectangular_shortfall,nonrectangular_at_bound,rectangular_at_bound
-European call,0.25,0.0,123,5,2,100,7.9159173199028645,7.9159173199028645,0.0,7.9159173199028645,7.9159173199028645,0.30731742398309253,0.30731742398309253,0.0,0.0,False,False
-Digital call,0.25,0.0,123,5,2,100,0.9921068396116088,0.9921068396116088,0.0,0.9921068396116088,0.9921068396116088,0.03851628382965325,0.03851628382965325,0.0,0.0,False,False
