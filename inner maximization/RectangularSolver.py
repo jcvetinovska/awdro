@@ -231,10 +231,20 @@ class RectangularSolver():
                     parent["state"],
                     (n_child_nodes, 1),
                 )
-                next_states = np.asarray(
-                    self.reference_model.step(starting_states, dt, rng),
-                    dtype=float,
-                )
+                if self.discretization.get("branching", "sample") == "quadrature":
+                    # Deterministic, arbitrage-free children:
+                    # 2 branches -> complete tree, >= 3 -> incomplete.
+                    next_states = np.asarray(
+                        self.reference_model.branch(
+                            parent["state"], dt, n_child_nodes
+                        ),
+                        dtype=float,
+                    )
+                else:
+                    next_states = np.asarray(
+                        self.reference_model.step(starting_states, dt, rng),
+                        dtype=float,
+                    )
 
                 if next_states.shape != (n_child_nodes, 2):
                     raise ValueError(

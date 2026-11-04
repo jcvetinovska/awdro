@@ -200,6 +200,62 @@ class Heston:
 
         return next_state
 
+    def branch(self, state, dt, n_branches):
+        """Deterministic, arbitrage-free successors of one node.
+
+        Uses ``n_branches`` equally weighted standard-normal quantiles
+        (rescaled to mean 0, variance 1) as a single shock ``z`` that drives
+        both the stock and the variance. The stock children are normalised
+        so that their average is exactly ``s * exp(mu * dt)``; with
+        ``mu = 0`` the reference tree is a martingale, hence arbitrage-free,
+        and the children have distinct, strictly ordered stock prices.
+
+        With one traded stock, ``n_branches = 2`` gives a complete tree and
+        ``n_branches >= 3`` an incomplete one.
+
+        Because one shock drives both coordinates, the stock/variance
+        correlation is +-1 within a node; the variance shock is scaled by
+        ``rho`` so that its loading matches the Heston covariance with
+        the stock shock.
+
+        Returns
+        -------
+        numpy.ndarray, shape (n_branches, 2)
+            Children ordered from lowest to highest stock price shock.
+        """
+        from statistics import NormalDist
+
+        state = np.asarray(state, dtype=float)
+        if state.shape != (2,):
+            raise ValueError("state must have shape (2,).")
+        if not isinstance(n_branches, (int, np.integer)) or n_branches < 2:
+            raise ValueError("n_branches must be an integer >= 2.")
+        if not np.isfinite(dt) or dt <= 0:
+            raise ValueError("dt must be finite and positive.")
+
+        s, v = state
+        v_pos = max(v, 0.0)
+
+        # Equally weighted quantile nodes, rescaled to mean 0 and variance 1.
+        nd = NormalDist()
+        z = np.array([nd.inv_cdf((k + 0.5) / n_branches)
+                      for k in range(n_branches)])
+        z = (z - z.mean()) / z.std()
+
+        # Stock: lognormal shape, then exact discrete martingale correction.
+        growth = np.exp(np.sqrt(v_pos * dt) * z)
+        s_next = s * np.exp(self.mu * dt) * growth / growth.mean()
+
+        # Variance: exact CIR conditional mean plus a correlated shock.
+        decay = np.exp(-self.kappa * dt)
+        v_mean = self.theta + (v_pos - self.theta) * decay
+        v_next = np.maximum(
+            v_mean + self.vol_of_vol * np.sqrt(v_pos * dt) * self.rho * z,
+            0.0,
+        )
+
+        return np.column_stack([s_next, v_next])
+
     def is_valid_state(self, state):
         state = np.asarray(state, dtype=float)
         return (
@@ -208,7 +264,6 @@ class Heston:
             and state[0] > 0
             and state[1] >= 0
     )
-
        
 
 
